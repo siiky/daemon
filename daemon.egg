@@ -1,0 +1,19 @@
+; vim: ft=scheme
+((author "siiky")
+ (license "unlicense")
+ (synopsis "Create daemon processes")
+ (version "0.0.0")
+ (category os)
+ (dependencies
+   )
+ (test-dependencies
+   )
+ (component-options
+   (csc-options "-O0" "-d3")
+   ;(linkage static)
+   )
+ (components
+   (extension daemon
+              (types-file)
+              (modules daemon)
+              (source daemon.scm))))
