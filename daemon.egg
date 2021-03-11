@@ -9,7 +9,7 @@
  (test-dependencies
    )
  (component-options
-   (csc-options "-O0" "-d3")
+   (csc-options "-O3" "-d3")
    ;(linkage static)
    )
  (components

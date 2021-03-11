@@ -1,6 +1,4 @@
-(module daemon
-  (daemon)
-
+(module daemon (daemon)
   (import
     scheme
     chicken.base
@@ -42,13 +40,12 @@
                 (apply print args)
                 (flush-output original-stderr)))))
 
-        (lambda _ #f)))
+        (constantly #f)))
 
   ; NOTE: Share a single /dev/null port across all created daemons. Can daemons
   ;       screw with each other because of this?
   (define (/dev/null open-port)
-    (let ((promise (delay (open-port "/dev/null"))))
-      (cute force promise)))
+    (delay (open-port "/dev/null")))
 
   (define /dev/null-r (/dev/null open-input-file))
   (define /dev/null-w (/dev/null open-output-file))
@@ -72,45 +69,45 @@
   ;
   ; 1.7 How do I get my program to act like a daemon?
   ; =================================================
-  ; 
+  ;
   ; A "daemon" process is usually defined as a background process that does not
   ; belong to a terminal session. Many system services are performed by
   ; daemons; network services, printing etc.
-  ; 
+  ;
   ; Simply invoking a program in the background isn't really adequate for these
   ; long-running programs; that does not correctly detach the process from the
   ; terminal session that started it. Also, the conventional way of starting
   ; daemons is simply to issue the command manually or from an rc script; the
   ; daemon is expected to put *itself* into the background.
-  ; 
+  ;
   ; Here are the steps to become a daemon:
-  ; 
+  ;
   ;   1. `fork()' so the parent can exit, this returns control to the command
   ;      line or shell invoking your program.  This step is required so that
   ;      the new process is guaranteed not to be a process group leader. The
   ;      next step, `setsid()', fails if you're a process group leader.
-  ; 
+  ;
   ;   2. `setsid()' to become a process group and session group leader. Since a
   ;      controlling terminal is associated with a session, and this new
   ;      session has not yet acquired a controlling terminal our process now
   ;      has no controlling terminal, which is a Good Thing for daemons.
-  ; 
+  ;
   ;   3. `fork()' again so the parent, (the session group leader), can exit.
   ;      This means that we, as a non-session group leader, can never regain a
   ;      controlling terminal.
-  ; 
+  ;
   ;   4. `chdir("/")' to ensure that our process doesn't keep any directory in
   ;      use. Failure to do this could make it so that an administrator
   ;      couldn't unmount a filesystem, because it was our current directory.
-  ; 
+  ;
   ;      [Equivalently, we could change to any directory containing files
   ;      important to the daemon's operation.]
-  ; 
+  ;
   ;   5. `umask(0)' so that we have complete control over the permissions of
   ;      anything we write. We don't know what umask we may have inherited.
-  ; 
+  ;
   ;      [This step is optional]
-  ; 
+  ;
   ;   6. `close()' fds 0, 1, and 2. This releases the standard in, out, and
   ;      error we inherited from our parent process. We have no way of knowing
   ;      where these fds might have been redirected to. Note that many daemons
@@ -120,7 +117,7 @@
   ;      need to do this or not.  If you think that there might be
   ;      file-descriptors open you should close them, since there's a limit on
   ;      number of concurrent file descriptors.
-  ; 
+  ;
   ;   7. Establish new open descriptors for stdin, stdout and stderr. Even if
   ;      you don't plan to use them, it is still a good idea to have them open.
   ;      The precise handling of these is a matter of taste; if you have a
@@ -128,7 +125,7 @@
   ;      and open `/dev/null' as stdin; alternatively, you could open
   ;      `/dev/console' as stderr and/or stdout, and `/dev/null' as stdin, or
   ;      any other combination that makes sense for your particular daemon.
-  ; 
+  ;
   ; Almost none of this is necessary (or advisable) if your daemon is being
   ; started by `inetd'.  In that case, stdin, stdout and stderr are all set up
   ; for you to refer to the network connection, and the `fork()'s and session
@@ -136,56 +133,81 @@
   ; `chdir()' and `umask()' steps remain as useful.
 
   ;;; @brief Create a daemon process to run a procedure.
+  ;;;
   ;;; @param thunk The thunk to run in the created daemon process.
+  ;;;
   ;;; @param cwd The working directory @a thunk will run in. If #f doesn't
   ;;;        change the working directory; If a string, changes to the path
   ;;;        specified by that string; Otherwise, changes to "/". Defaults
   ;;;        to #t if not given, i.e., changes to "/".
-  ;;; @param stdin The daemon's stdin.
-  ;;; @param stdout The daemon's stdout.
-  ;;; @param stderr The daemon's stderr.
+  ;;;
   ;;; @param killothers? The `chicken.process.process-fork` optional parameter
   ;;;        `killothers?`.
+  ;;;
+  ;;; @param stderr The daemon's stderr -- changes (current-error-port).
+  ;;;
+  ;;; @param stdin The daemon's stdin -- changes (current-input-port).
+  ;;;
+  ;;; @param stdout The daemon's stdout -- changes (current-output-port).
+  ;;;
   ;;; @param want-pid? If #f returns immediatly after the first `fork()`;
   ;;;        otherwise, waits for the daemon's PID. Defaults to #f.
+  ;;;
   ;;; @returns #f if want-pid? is #f; otherwise, returns the PID of the daemon
   ;;;          process or #f.
   ;;;
   ;;; @a stdin, @a stdout, and @a stderr, if given, can be a string (filepath),
-  ;;;   a port, an integer (file descriptor), a procedure, a promise, or #f. If
-  ;;;   a string, a port will be opened for that file; if a port, it will be
-  ;;;   used as is; if an integer, a port will be opened from it; if a
-  ;;;   procedure, it'll be called with no arguments; if a promise, it'll be
-  ;;;   forced; if #f, no change is made. Defaults to "/dev/null" if not given.
+  ;;;   a port, an integer (file descriptor), a procedure, a promise, or a
+  ;;;   boolean. If a string, a port will be opened for that file; if a port,
+  ;;;   it will be used as is; if an integer, a port will be opened from it; if
+  ;;;   a procedure, it'll be called with no arguments; if a promise, it'll be
+  ;;;   forced; if #f, no change is made; if #t, uses the default, which is
+  ;;;   "/dev/null".
   ;;;
   ;;; Note that stdin, stdout, and stderr are changed *AFTER* changing the
   ;;;   working directory.
-  ;;;
-  ;;; TODO:
-  ;;;   * Test `cwd`;
   (: daemon (procedure
-              ((procedure () *) #!key (or boolean string) std/r std/w std/w * *)
+              (
+               #;thunk       (procedure () *)
+               #!key
+               #;cwd         (or boolean string)
+               #;killothers? *
+               #;stderr      std/w
+               #;stdin       std/r
+               #;stdout      std/w
+               #;want-pid?   *
+               )
               (or false fixnum)))
-  (define (daemon thunk #!key (cwd #t) (stdin /dev/null-r) (stdout /dev/null-w) (stderr /dev/null-w) (killothers? #f) (want-pid? #f))
+  (define (daemon thunk
+                  #!key
+                  (cwd #t)
+                  (killothers? #f)
+                  (stderr /dev/null-w)
+                  (stdin /dev/null-r)
+                  (stdout /dev/null-w)
+                  (want-pid? #f))
     (define (inner-fork-thunk)
-      (define (change-std* fd std* current-*-port open-port open-port/fd)
+      (define (change-std* fd std* current-*-port open-port open-port/fd /dev/null)
         (define (argument->port arg open-port open-port/fd)
           (cond
             ((port? arg)
              arg)
             ((string? arg)
              (open-port arg))
-            ((and (number? arg) (exact? arg))
+            ; `arg` is necessarily #t because of `(when std*` below
+            ((boolean? arg)
+             (force /dev/null))
+            ((promise? arg)
+             (force arg))
+            ((fixnum? arg)
              (open-port/fd arg))
             ((procedure? arg)
              (arg))
-            ((promise? arg)
-             (force arg))
             (else (error 'daemon "Argument not of the supported type" arg))))
 
         (when std*
-          ; NOTE: Closing now may result in getting this same fd if opening
-          ;       next, so we can skip `dup()`ing.
+          ; NOTE: Closing now will most likely result in getting this same fd
+          ;       if opening next, so we can skip `dup()`ing.
           (file-close fd)
           (let* ((std* (argument->port std* open-port open-port/fd))
                  (port-fd (port->fileno std*)))
@@ -206,15 +228,25 @@
       (eprint "step 5")
       (umask 0)
 
+      ; NOTE: If the given stdout and stderr are string=? open a single port
+      ;       for it and share between both. This way, writes on either
+      ;       stdout or stderr end up on the same file.
       ; Steps (6) & (7)
-      (eprint "steps 6 & 7 (stdin)")
-      (change-std* fileno/stdin stdin current-input-port open-input-file open-input-file*)
+      (receive (stdout stderr) (if (and (string? stdout)
+                                        (string? stderr)
+                                        (string=? stdout stderr))
+                                   (let ((out (open-output-file stdout)))
+                                     (values out out))
+                                   (values stdout stderr))
 
-      (eprint "steps 6 & 7 (stdout)")
-      (change-std* fileno/stdout stdout current-output-port open-output-file open-output-file*)
+        (eprint "steps 6 & 7 (stdin)")
+        (change-std* fileno/stdin stdin current-input-port open-input-file open-input-file* /dev/null-r)
 
-      (eprint "steps 6 & 7 (stderr)")
-      (change-std* fileno/stderr stderr current-error-port open-output-file open-output-file*)
+        (eprint "steps 6 & 7 (stdout)")
+        (change-std* fileno/stdout stdout current-output-port open-output-file open-output-file* /dev/null-w)
+
+        (eprint "steps 6 & 7 (stderr)")
+        (change-std* fileno/stderr stderr current-error-port open-output-file open-output-file* /dev/null-w))
 
       ; Finally, run the given thunk.
       (thunk))
@@ -250,7 +282,7 @@
     (eprint "step 1")
     (if want-pid?
 
-        (let-values (((pipe/r-fd pipe/w-fd) (create-pipe)))
+        (receive (pipe/r-fd pipe/w-fd) (create-pipe)
           (process-fork (outer-fork-thunk* pipe/r-fd pipe/w-fd) killothers?)
           (file-close pipe/w-fd)
           (recv-pid pipe/r-fd))
