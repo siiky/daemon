@@ -50,17 +50,19 @@
   (define /dev/null-r (/dev/null open-input-file))
   (define /dev/null-w (/dev/null open-output-file))
 
-  #>
-  #include <sys/stat.h>
-  #include <sys/types.h>
-  <#
+  ; NOTE: For `setsid` and `pid_t`
+  ;#>
+  ;#include <sys/stat.h>
+  ;#include <sys/types.h>
+  ;<#
 
   ; NOTE: chicken.process-context.posix.create-session seems to be setsid.
   ;(define setsid (foreign-lambda pid_t "setsid"))
   (define setsid create-session)
 
-  ; TODO: Define `mode` as `mode_t` in case defining it as an `integer` results
-  ;       in problems. The following definition results in a compilation error.
+  ; TODO: Define `mode` as `mode_t` in case defining it as an `integer` leads
+  ;       to problems. The following definition results in a compilation error,
+  ;       but I don't understand why.
   ;(define-foreign-type mode "mode_t")
   (define-foreign-type mode integer)
   (define umask (foreign-lambda mode "umask" mode))
@@ -139,7 +141,7 @@
   ;;; @param cwd The working directory @a thunk will run in. If #f doesn't
   ;;;        change the working directory; If a string, changes to the path
   ;;;        specified by that string; Otherwise, changes to "/". Defaults
-  ;;;        to #t if not given, i.e., changes to "/".
+  ;;;        to "/".
   ;;;
   ;;; @param killothers? The `chicken.process.process-fork` optional parameter
   ;;;        `killothers?`.
@@ -157,30 +159,28 @@
   ;;;          process or #f.
   ;;;
   ;;; @a stdin, @a stdout, and @a stderr, if given, can be a string (filepath),
-  ;;;   a port, an integer (file descriptor), a procedure, a promise, or a
-  ;;;   boolean. If a string, a port will be opened for that file; if a port,
-  ;;;   it will be used as is; if an integer, a port will be opened from it; if
-  ;;;   a procedure, it'll be called with no arguments; if a promise, it'll be
-  ;;;   forced; if #f, no change is made; if #t, uses the default, which is
-  ;;;   "/dev/null".
+  ;;;   a port, an integer (file descriptor), a thunk, a promise, or a boolean.
+  ;;;   If a string, a port will be opened for that file; if a port, it will be
+  ;;;   used as is; if an integer, a port will be opened from it; if a thunk,
+  ;;;   it'll be called with no arguments; if a promise, it'll be forced; if
+  ;;;   #f, no change is made; if #t, uses the default, which is "/dev/null".
   ;;;
   ;;; Note that stdin, stdout, and stderr are changed *AFTER* changing the
   ;;;   working directory.
   (: daemon (procedure
-              (
-               #;thunk       (procedure () *)
-               #!key
-               #;cwd         (or boolean string)
-               #;killothers? *
-               #;stderr      std/w
-               #;stdin       std/r
-               #;stdout      std/w
-               #;want-pid?   *
+              (#!key
+               #:cwd         (or false string)
+               #:killothers? *
+               #:stderr      std/w
+               #:stdin       std/r
+               #:stdout      std/w
+               #:thunk       (procedure () *)
+               #:want-pid?   *
                )
               (or false fixnum)))
   (define (daemon thunk
                   #!key
-                  (cwd #t)
+                  (cwd "/")
                   (killothers? #f)
                   (stderr /dev/null-w)
                   (stdin /dev/null-r)
@@ -273,10 +273,10 @@
       (send-pid (outer-fork-thunk) pipe/w-fd))
 
     (define (recv-pid pipe/r-fd)
-      (let ((port-r (open-input-file* pipe/r-fd)))
-        (let ((pid (read port-r)))
-          (close-input-port port-r)
-          (and (fixnum? pid) pid))))
+      (let* ((port-r (open-input-file* pipe/r-fd))
+             (pid (read port-r)))
+        (close-input-port port-r)
+        (and (fixnum? pid) pid)))
 
     ; Step (1)
     (eprint "step 1")

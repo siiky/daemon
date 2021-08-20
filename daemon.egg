@@ -2,7 +2,7 @@
 ((author "siiky")
  (license "unlicense")
  (synopsis "Create daemon processes")
- (version "0.0.0")
+ (version "0.0.1")
  (category os)
  (dependencies
    )
