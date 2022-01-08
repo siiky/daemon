@@ -1,0 +1,214 @@
+[[tags: egg daemon]]
+
+== daemon
+
+[[toc:]]
+
+=== Description
+
+Create processes to do your dirty work in the background.
+
+Based on section 1.7 of [[http://www.faqs.org/faqs/unix-faq/programmer/faq]], quoted next for convenience:
+
+ 1.7 How do I get my program to act like a daemon?
+ =================================================
+ 
+ A "daemon" process is usually defined as a background process that does not
+ belong to a terminal session. Many system services are performed by
+ daemons; network services, printing etc.
+ 
+ Simply invoking a program in the background isn't really adequate for these
+ long-running programs; that does not correctly detach the process from the
+ terminal session that started it. Also, the conventional way of starting
+ daemons is simply to issue the command manually or from an rc script; the
+ daemon is expected to put *itself* into the background.
+ 
+ Here are the steps to become a daemon:
+ 
+   1. `fork()' so the parent can exit, this returns control to the command
+      line or shell invoking your program.  This step is required so that
+      the new process is guaranteed not to be a process group leader. The
+      next step, `setsid()', fails if you're a process group leader.
+ 
+   2. `setsid()' to become a process group and session group leader. Since a
+      controlling terminal is associated with a session, and this new
+      session has not yet acquired a controlling terminal our process now
+      has no controlling terminal, which is a Good Thing for daemons.
+ 
+   3. `fork()' again so the parent, (the session group leader), can exit.
+      This means that we, as a non-session group leader, can never regain a
+      controlling terminal.
+ 
+   4. `chdir("/")' to ensure that our process doesn't keep any directory in
+      use. Failure to do this could make it so that an administrator
+      couldn't unmount a filesystem, because it was our current directory.
+ 
+      [Equivalently, we could change to any directory containing files
+      important to the daemon's operation.]
+ 
+   5. `umask(0)' so that we have complete control over the permissions of
+      anything we write. We don't know what umask we may have inherited.
+ 
+      [This step is optional]
+ 
+   6. `close()' fds 0, 1, and 2. This releases the standard in, out, and
+      error we inherited from our parent process. We have no way of knowing
+      where these fds might have been redirected to. Note that many daemons
+      use `sysconf()' to determine the limit `_SC_OPEN_MAX'.  `_SC_OPEN_MAX'
+      tells you the maximun open files/process. Then in a loop, the daemon
+      can close all possible file descriptors. You have to decide if you
+      need to do this or not.  If you think that there might be
+      file-descriptors open you should close them, since there's a limit on
+      number of concurrent file descriptors.
+ 
+   7. Establish new open descriptors for stdin, stdout and stderr. Even if
+      you don't plan to use them, it is still a good idea to have them open.
+      The precise handling of these is a matter of taste; if you have a
+      logfile, for example, you might wish to open it as stdout or stderr,
+      and open `/dev/null' as stdin; alternatively, you could open
+      `/dev/console' as stderr and/or stdout, and `/dev/null' as stdin, or
+      any other combination that makes sense for your particular daemon.
+ 
+ Almost none of this is necessary (or advisable) if your daemon is being
+ started by `inetd'.  In that case, stdin, stdout and stderr are all set up
+ for you to refer to the network connection, and the `fork()'s and session
+ manipulation should *not* be done (to avoid confusing `inetd').  Only the
+ `chdir()' and `umask()' steps remain as useful.
+
+The highest overview possible is that the calling process ({{P}}) forks to
+create a child ({{C1}}), and this child will create another child ({{C2}}) that
+will run the thunk.
+
+This egg is not thoroughly tested, but I've been using it for a while for some
+simple use cases, and it's behaved well enough so far.
+
+Help, bug reports, suggestions, &c are all much appreciated!
+
+=== Author
+
+siiky
+
+=== Repository
+
+[[https://github.com/siiky/daemon]]
+
+=== Requirements
+
+No dependencies.
+
+=== API
+
+Details extracted from the source code documentation.
+
+<procedure>(daemon thunk #!key (cwd "/") (killothers? #f) (stderr /dev/null-w) (stdin /dev/null-r) (stdout /dev/null-w) (want-pid? #f))</procedure>
+
+The one and only procedure exported from the {{daemon}} module. Creates a
+background process to run the given {{thunk}}.
+
+If {{want-pid?}} is {{#f}} returns {{#f}}; otherwise, and if everything goes
+well, returns the PID of the created process, as a fixnum.
+
+As with all OS things, the devil is in the details -- implementation details do
+matter a great deal!
+
+; {{thunk}} : The thunk to run in the created daemon process.
+
+; {{cwd}} : The working directory of the created process. Defaults to {{"/"}}. If {{#f}} is given, doesn't change the working directory (which will be inherited from the parent process {{P}}). If the given value is a string, changes to that directory. Otherwise, uses the default value.
+
+; {{killothers?}} : Check [[https://api.call-cc.org/5/doc/chicken/process/process-fork|{{chicken.process.process-fork}}]] for details. Defaults to {{#f}}.
+
+; {{stderr}}, {{stdin}}, {{stdout}} : These change the {{(current-error-port)}}, {{(current-input-port)}}, and {{(current-output-port)}} available to the {{thunk}}. All three default to {{/dev/null}}. Legal values for these parameters are input/output ports (whichever is appropriate); a string designating the path to a file (absolute, or relative to {{cwd}}); a fixnum designating a file descriptor; a promise that may be forced or a thunk that may be called, that evaluate to an input/output port.
+
+; {{want-pid?}} : In some circumstances it is useful to know the PID of the created process. If {{want-pid?}} is given and not {{#f}}, then the calling process {{P}} waits for {{C2}} to be created and for {{C1}} to report back {{C2}}'s PID; otherwise, the procedure returns {{#f}} immediately. The implementation is a hack: {{P}} opens a one-way pipe from {{C1}}; when {{C1}} forks for {{C2}}, {{C1}} {{write}}s {{C2}}'s PID to the pipe; finally {{P}} {{read}}s the PID from the pipe. Lots could go wrong here, but it's hard to know beforehand of all the possible failure causes.
+
+=== Example
+
+Create a file {{stdin.txt}} with some text and run the following:
+
+<enscript highlight="scheme">
+(import chicken.io chicken.port)
+(import srfi-42)
+(import daemon)
+
+(print "daemon starting")
+(let ((stdin "stdin.txt") ; Let each process read the file
+      ; Share the output files.
+      (stdout (open-output-file "stdout.txt"))
+      (stderr (open-output-file "stderr.txt")))
+  (let ((pids
+          (list-ec (:range i 0 10)
+                   (daemon
+                     (lambda ()
+                       (print "started[" i "]")
+                       (do-ec (:port ln (current-input-port) read-line)
+                              (begin
+                                (with-output-to-port (current-error-port)
+                                                     (cute print "stderr[" i "]: " ln))
+                                (print "stdout[" i "]: " ln)
+                                (sleep 1))))
+                     #:cwd #f
+                     #:stdin stdin
+                     #:stdout stdout
+                     #:stderr stderr
+                     #:want-pid? #t))))
+
+    (print "daemons started " pids)))
+</enscript>
+
+You should be able to see on your terminal the lines {{daemon starting}},
+{{daemons started (list of 10 PIDs)}}, and some lines {{started[X]}}, where
+{{X}} is the "ID" of a daemon (the {{i}} variable).
+
+Additionally, you should expect {{stdin.txt}} to be untouched, and
+{{stdout.txt}} and {{stderr.txt}} to have the contents of {{stdin.txt}} with
+lines like {{stdout[X]: LINE}} and {{stderr[X]: LINE}}, respectively -- where
+{{LINE}} is a line read from {{stdin.txt}}.
+
+Important points to note here:
+
+* {{stdin.txt}} is "private"/"local" to each daemon process because it is
+  opened by each daemon process -- {{stdin}}, {{stdout}}, and {{stderr}} are
+  opened inside {{C1}} when given as a string (path) or fixnum (file
+  descriptor).
+
+* {{stdout}} and {{stderr}} are "shared"/"global" to both daemon processes
+  because the ports were created by {{P}}, and therefore there's only one port
+  for each.
+
+* The files are relative to the {{CWD}} of the shell where you ran the program.
+
+* Although forking is relatively cheap and fast (to a human), you should expect
+  the example ({{P}}) to finish faster if you give {{#:want-pids? #f}}.
+
+=== License
+
+ This is free and unencumbered software released into the public domain.
+ 
+ Anyone is free to copy, modify, publish, use, compile, sell, or
+ distribute this software, either in source code form or as a compiled
+ binary, for any purpose, commercial or non-commercial, and by any
+ means.
+ 
+ In jurisdictions that recognize copyright laws, the author or authors
+ of this software dedicate any and all copyright interest in the
+ software to the public domain. We make this dedication for the benefit
+ of the public at large and to the detriment of our heirs and
+ successors. We intend this dedication to be an overt act of
+ relinquishment in perpetuity of all present and future rights to this
+ software under copyright law.
+ 
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ OTHER DEALINGS IN THE SOFTWARE.
+ 
+ For more information, please refer to <http://unlicense.org>
+
+=== Version History
+
+==== 0.0.1 (2022/01/08)
+
+Initial release with documentation and all.

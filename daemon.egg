@@ -4,14 +4,8 @@
  (synopsis "Create daemon processes")
  (version "0.0.1")
  (category os)
- (dependencies
-   )
- (test-dependencies
-   )
  (component-options
-   (csc-options "-O3" "-d3")
-   ;(linkage static)
-   )
+   (csc-options "-O3" "-d3"))
  (components
    (extension daemon
               (types-file)

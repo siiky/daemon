@@ -152,7 +152,7 @@
   ;;;
   ;;; @param stdout The daemon's stdout -- changes (current-output-port).
   ;;;
-  ;;; @param want-pid? If #f returns immediatly after the first `fork()`;
+  ;;; @param want-pid? If #f returns immediately after the first `fork()`;
   ;;;        otherwise, waits for the daemon's PID. Defaults to #f.
   ;;;
   ;;; @returns #f if want-pid? is #f; otherwise, returns the PID of the daemon
@@ -168,13 +168,13 @@
   ;;; Note that stdin, stdout, and stderr are changed *AFTER* changing the
   ;;;   working directory.
   (: daemon (procedure
-              (#!key
+              ((procedure () *)
+               #!key
                #:cwd         (or false string)
                #:killothers? *
                #:stderr      std/w
                #:stdin       std/r
                #:stdout      std/w
-               #:thunk       (procedure () *)
                #:want-pid?   *
                )
               (or false fixnum)))
