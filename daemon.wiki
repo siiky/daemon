@@ -90,7 +90,7 @@ siiky
 
 === Repository
 
-[[https://github.com/siiky/daemon]]
+[[https://git.sr.ht/~siiky/daemon]]
 
 === Requirements
 
